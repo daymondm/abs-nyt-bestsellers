@@ -4,16 +4,22 @@ from typing import List, Iterable, Dict, Any, Optional, Literal
 from datetime import date, datetime, timezone
 import uuid
 import pysqlite3 as sqlite3
+#import sqlite3
 
 NYT_ENDPOINT_URL = "https://api.nytimes.com/svc/books/v3/lists/overview.json"
 NYT_API_KEY = "xxx"  # get your own key from https://developer.nytimes.com/
 NYT_LIST_DATE = date.today().strftime("%Y-%m-%d")  # use today's date for current list
 
+#ABS_DB_PATH = r"Y:\absdatabase.sqlite" # path to your ABS sqlite database
 ABS_DB_PATH = r"/share/homes/xxx/docker/audiobookshelf/config/absdatabase.sqlite" # path to your ABS sqlite database
-ABS_LIBRARY_NAME = "books" # your library name in ABS
 
 ABS_COLLECTIONS = {
-    "NY Times Best Sellers": ["combined-print-and-e-book-fiction", "combined-print-and-e-book-nonfiction", "hardcover-fiction", "hardcover-nonfiction", "trade-fiction-paperback", "paperback-nonfiction","advice-how-to-and-miscellaneous","childrens-middle-grade-hardcover","series-books","young-adult-hardcover","audio-fiction","audio-nonfiction","business-books","mass-market-monthly","middle-grade-paperback-monthly","young-adult-paperback-monthly"],
+    "books": { # this is the name of the library in ABS - must exist or this will fail
+        "NY Times Best Sellers": ["combined-print-and-e-book-fiction", "combined-print-and-e-book-nonfiction", "hardcover-fiction", "hardcover-nonfiction", "trade-fiction-paperback", "paperback-nonfiction","advice-how-to-and-miscellaneous","childrens-middle-grade-hardcover","series-books","young-adult-hardcover","audio-fiction","audio-nonfiction","business-books","mass-market-monthly","middle-grade-paperback-monthly","young-adult-paperback-monthly"],
+    },
+    "audiobooks": { # this is the name of the library in ABS - must exist or this will fail
+        "NY Times Best Sellers": ["combined-print-and-e-book-fiction", "combined-print-and-e-book-nonfiction", "hardcover-fiction", "hardcover-nonfiction", "trade-fiction-paperback", "paperback-nonfiction","advice-how-to-and-miscellaneous","childrens-middle-grade-hardcover","series-books","young-adult-hardcover","audio-fiction","audio-nonfiction","business-books","mass-market-monthly","middle-grade-paperback-monthly","young-adult-paperback-monthly"],
+    }
 }
 
 @dataclass
@@ -333,7 +339,7 @@ def get_or_create_collection(
 
     # Try to find existing
     row = conn.execute(
-        "SELECT id FROM collections WHERE name = ? LIMIT 1", (collection_name,)
+        "SELECT id FROM collections WHERE name = ? AND libraryId = ? LIMIT 1", (collection_name,library_id)
     ).fetchone()
     if row:
         coll_id = row["id"]
@@ -401,7 +407,7 @@ def upsert_abs_collection_with_books(
     conn: sqlite3.Connection,
     abs_collection_name: str,
     books_for_collection: list,
-    library_name: str = ABS_LIBRARY_NAME,
+    library_name: str,
     library_id: Optional[str] = None
 ) -> str:
     """
@@ -415,38 +421,39 @@ def upsert_abs_collection_with_books(
 
 def main():
     overview = fetch_nyt_overview()
-    collections = build_abs_collections(overview, ABS_COLLECTIONS)
-    lib_id = None
 
-    # enrich with ABS ids and remove books where ABS id not found
-    with open_abs_db() as conn:
-        lib_id = get_library_id(conn, ABS_LIBRARY_NAME)
+    for library_name, this_collection in ABS_COLLECTIONS.items():
+        collections = build_abs_collections(overview, this_collection)
 
-        conn.isolation_level = None          # manual transaction
-        conn.execute("BEGIN IMMEDIATE;")     # lock for consistent updates
-        try:
-            # 1) enrich and filter (keep only books we can resolve)
-            for name, books in collections.items():
-                seen = set()
-                kept = []
-                for b in books:
-                    abs_id = resolve_abs_id_for_book(conn, b, lib_id)
-                    if not abs_id or abs_id in seen:
-                        continue
-                    b.abs_book_id = abs_id
-                    seen.add(abs_id)
-                    kept.append(b)
-                collections[name] = kept
+        # enrich with ABS ids and remove books where ABS id not found
+        with open_abs_db() as conn:
+            lib_id = get_library_id(conn, library_name)
 
-            # 2) upsert each ABS collection and replace its rows
-            for name, books in collections.items():
-                coll_id = upsert_abs_collection_with_books(conn, name, books, library_id=lib_id)
-                print(f"Updated collection '{name}' (id={coll_id}) with {len(books)} books")
+            conn.isolation_level = None          # manual transaction
+            conn.execute("BEGIN IMMEDIATE;")     # lock for consistent updates
+            try:
+                # 1) enrich and filter (keep only books we can resolve)
+                for name, books in collections.items():
+                    seen = set()
+                    kept = []
+                    for b in books:
+                        abs_id = resolve_abs_id_for_book(conn, b, lib_id)
+                        if not abs_id or abs_id in seen:
+                            continue
+                        b.abs_book_id = abs_id
+                        seen.add(abs_id)
+                        kept.append(b)
+                    collections[name] = kept
 
-            conn.execute("COMMIT;")
-        except Exception:
-            conn.execute("ROLLBACK;")
-            raise
+                # 2) upsert each ABS collection and replace its rows
+                for name, books in collections.items():
+                    coll_id = upsert_abs_collection_with_books(conn, name, books, library_name, library_id=lib_id)
+                    print(f"Updated collection '{name}' (id={coll_id}) with {len(books)} books")
+
+                conn.execute("COMMIT;")
+            except Exception:
+                conn.execute("ROLLBACK;")
+                raise
 
 
 
