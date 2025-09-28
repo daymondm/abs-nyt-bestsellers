@@ -1,26 +1,112 @@
-A python script to create a collection of books in audiobookshelf based on the NY Times Best Sellers list
+\# abs-nyt-bestsellers
 
-Replace NYT_API_KEY with your API key from https://developer.nytimes.com/
-Replace ABS_DB_PATH with the path to your audiobookshelf database
-Replace ABS_LIBRARY_NAME with the name of the library containing the collection
 
-Replace ABS_COLLECTIONS with the name of the collection (list_name_encoded), and the name of the lists from the NYT API 
-Full list as of 2025-09-27:
-"combined-print-and-e-book-fiction"
-"combined-print-and-e-book-nonfiction"
-"hardcover-fiction"
-"hardcover-nonfiction"
-"trade-fiction-paperback"
-"paperback-nonfiction"
-"advice-how-to-and-miscellaneous"
-"childrens-middle-grade-hardcover"
-"picture-books"
-"series-books"
-"young-adult-hardcover"
-"audio-fiction"
-"audio-nonfiction"
-"business-books"
-"graphic-books-and-manga"
-"mass-market-monthly"
-"middle-grade-paperback-monthly"
+
+A python script to keep the NYT best sellers list in a collection up to date in audiobookshelf.
+
+
+
+\## Installation / Usage
+
+
+
+Edit the variables at the top of the python file. You will need to change the NYT\_API\_KEY and ABS\_COLLECTIONS. Use crontab to schedule the execution weekly.
+
+
+
+The script will automatically add or remove the books or audiobooks that you have in your library to the collection that are also on the NYT best sellers list.
+
+
+
+\### NYT\_API\_KEY
+
+
+
+Sign up for a free developer account and \[NYTimes.com](https://developer.nytimes.com). You will need to add an app, and obtain an API key.
+
+
+
+\### Edit the ABS\_COLLECTIONS
+
+
+
+The first set of keys should match your library names. The script will fail if the libraries do not already exist. In the example below, I have a library named "books" and a library named "audiobooks".
+
+The key to the array will be the name of the collection, and the array will be the list\_name\_encoded values from the NYT API.
+
+
+
+```
+
+ABS\_COLLECTIONS = {
+
+&nbsp;   "books": { # this is the name of the library in ABS - must exist or this will fail
+
+&nbsp;       "NY Times Best Sellers": \["combined-print-and-e-book-fiction", "combined-print-and-e-book-nonfiction", "hardcover-fiction", "hardcover-nonfiction", "trade-fiction-paperback", "paperback-nonfiction","advice-how-to-and-miscellaneous","childrens-middle-grade-hardcover","series-books","young-adult-hardcover","audio-fiction","audio-nonfiction","business-books","mass-market-monthly","middle-grade-paperback-monthly","young-adult-paperback-monthly"],
+
+&nbsp;   },
+
+&nbsp;   "audiobooks": { # this is the name of the library in ABS - must exist or this will fail
+
+&nbsp;       "NY Times Best Sellers": \["combined-print-and-e-book-fiction", "combined-print-and-e-book-nonfiction", "hardcover-fiction", "hardcover-nonfiction", "trade-fiction-paperback", "paperback-nonfiction","advice-how-to-and-miscellaneous","childrens-middle-grade-hardcover","series-books","young-adult-hardcover","audio-fiction","audio-nonfiction","business-books","mass-market-monthly","middle-grade-paperback-monthly","young-adult-paperback-monthly"],
+
+&nbsp;   }
+
+}
+
+```
+
+
+
+A complete list of list\_name\_encoded values are below:
+
+
+
+```
+
+"combined-print-and-e-book-fiction" 
+
+"combined-print-and-e-book-nonfiction" 
+
+"hardcover-fiction" 
+
+"hardcover-nonfiction" 
+
+"trade-fiction-paperback" 
+
+"paperback-nonfiction" 
+
+"advice-how-to-and-miscellaneous" 
+
+"childrens-middle-grade-hardcover" 
+
+"picture-books" 
+
+"series-books" 
+
+"young-adult-hardcover" 
+
+"audio-fiction" 
+
+"audio-nonfiction" 
+
+"business-books" 
+
+"graphic-books-and-manga" 
+
+"mass-market-monthly" 
+
+"middle-grade-paperback-monthly" 
+
 "young-adult-paperback-monthly"
+
+```
+
+
+
+\### Edit ABS\_DB\_PATH
+
+
+
+This should be the full path to your abs SQLite database file.
+
