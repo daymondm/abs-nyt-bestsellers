@@ -3,13 +3,13 @@ from dataclasses import dataclass, field, replace
 from typing import List, Iterable, Dict, Any, Optional, Literal
 from datetime import date, datetime, timezone
 import uuid
-import sqlite3
+import pysqlite3 as sqlite3
 
 NYT_ENDPOINT_URL = "https://api.nytimes.com/svc/books/v3/lists/overview.json"
-NYT_API_KEY = "PUT_YOUR_API_KEY_HERE"  # get your own key from https://developer.nytimes.com/
+NYT_API_KEY = "xxx"  # get your own key from https://developer.nytimes.com/
 NYT_LIST_DATE = date.today().strftime("%Y-%m-%d")  # use today's date for current list
 
-ABS_DB_PATH = r"Y:\absdatabase.sqlite" # path to your ABS sqlite database
+ABS_DB_PATH = r"/share/homes/xxx/docker/audiobookshelf/config/absdatabase.sqlite" # path to your ABS sqlite database
 ABS_LIBRARY_NAME = "books" # your library name in ABS
 
 ABS_COLLECTIONS = {
@@ -173,16 +173,6 @@ def build_abs_collections(overview_json: dict, mapping: Dict[str, List[str]]) ->
 
     return collections
 
-"""
-def open_abs_db(path: str = ABS_DB_PATH) -> sqlite3.Connection:
-    # Read-only, safer: URI mode
-    conn = sqlite3.connect(f"file:{path}", uri=True)
-    conn.row_factory = sqlite3.Row
-    # Not strictly needed for reads, but good hygiene:
-    conn.execute("PRAGMA foreign_keys = ON;")
-    return conn
-"""
-    
 def open_abs_db(
     path: str = ABS_DB_PATH,
     mode: Literal["ro","rw","rwc"] = "rw",   # ro=read-only, rw=read/write existing, rwc=read/write create
@@ -217,7 +207,7 @@ def open_abs_db(
             raise
     raise last_exc
 
-def find_book_id_by_isbn(conn: sqlite3.Connection, isbn: str) -> Optional[str]:
+def find_book_id_by_isbn(conn: sqlite3.Connection, isbn: str, library_id: str) -> Optional[str]:
     if not isbn:
         return None
     n = normalize_isbn(isbn)
@@ -225,12 +215,16 @@ def find_book_id_by_isbn(conn: sqlite3.Connection, isbn: str) -> Optional[str]:
         return None
     row = conn.execute(
         """
-        SELECT id
-        FROM books
-        WHERE REPLACE(LOWER(COALESCE(isbn,'')),'-','') = ?
+        SELECT b.id
+        FROM books b
+        WHERE 
+            REPLACE(LOWER(COALESCE(b.isbn,'')),'-','') = ?
+            AND EXISTS (
+                SELECT 1 FROM libraryItems li WHERE li.mediaId = b.id AND li.libraryId = ?
+            )
         LIMIT 1
         """,
-        (n,),
+        (n,library_id),
     ).fetchone()
     return row["id"] if row else None
 
@@ -238,6 +232,7 @@ def find_book_id_by_author_title(
     conn: sqlite3.Connection,
     title: str,
     authors: Iterable[str],
+    library_id: str
 ) -> Optional[str]:
     """
     Tries (any author LIKE pattern) AND exact title match (case-insensitive).
@@ -258,28 +253,31 @@ def find_book_id_by_author_title(
             WHERE ba.bookId = b.id
               AND LOWER(a.name) LIKE ?
       )
+      AND EXISTS (
+        SELECT 1 FROM libraryItems li WHERE li.mediaId = b.id AND li.libraryId = ?
+        )
     LIMIT 1
     """
 
     for a in authors or []:
         pat = make_author_like_pattern(a)
-        row = conn.execute(sql, (tnorm, pat)).fetchone()
+        row = conn.execute(sql, (tnorm, pat, library_id)).fetchone()
         if row:
             return row["id"]
     return None
 
-def resolve_abs_id_for_book(conn: sqlite3.Connection, book) -> Optional[str]:
+def resolve_abs_id_for_book(conn: sqlite3.Connection, book, library_id: str) -> Optional[str]:
     """
     book: your NYT Book object (with fields: title, authors, isbn)
     Returns ABS books.id or None.
     """
     # 1) ISBN
-    bid = find_book_id_by_isbn(conn, getattr(book, "isbn", ""))
+    bid = find_book_id_by_isbn(conn, getattr(book, "isbn", ""), library_id)
     if bid:
         return bid
 
     # 2) Author + exact title (case-insensitive)
-    bid = find_book_id_by_author_title(conn, getattr(book, "title", ""), getattr(book, "authors", []))
+    bid = find_book_id_by_author_title(conn, getattr(book, "title", ""), getattr(book, "authors", []), library_id)
     if bid:
         return bid
 
@@ -290,7 +288,7 @@ def resolve_abs_id_for_book(conn: sqlite3.Connection, book) -> Optional[str]:
 
     return None
 
-def enrich_books_with_abs_ids(books, db_path: str = ABS_DB_PATH):
+def enrich_books_with_abs_ids(books, library_id: str, db_path: str = ABS_DB_PATH):
     """
     For a list of Book objects, set/attach abs_book_id.
     """
@@ -298,7 +296,7 @@ def enrich_books_with_abs_ids(books, db_path: str = ABS_DB_PATH):
     try:
         out = []
         for b in books:
-            abs_id = resolve_abs_id_for_book(conn, b)
+            abs_id = resolve_abs_id_for_book(conn, b, library_id)
 
             setattr(b, "abs_book_id", abs_id)
             out.append(b)
@@ -404,12 +402,13 @@ def upsert_abs_collection_with_books(
     abs_collection_name: str,
     books_for_collection: list,
     library_name: str = ABS_LIBRARY_NAME,
+    library_id: Optional[str] = None
 ) -> str:
     """
     Ensure the collection exists/updated, then replace its collectionBooks rows.
     Returns the collection id.
     """
-    lib_id = get_library_id(conn, library_name)
+    lib_id = library_id if library_id is not None else get_library_id(conn, library_name)
     coll_id = get_or_create_collection(conn, abs_collection_name, lib_id)
     replace_collection_books(conn, coll_id, books_for_collection)
     return coll_id
@@ -417,9 +416,12 @@ def upsert_abs_collection_with_books(
 def main():
     overview = fetch_nyt_overview()
     collections = build_abs_collections(overview, ABS_COLLECTIONS)
+    lib_id = None
 
     # enrich with ABS ids and remove books where ABS id not found
     with open_abs_db() as conn:
+        lib_id = get_library_id(conn, ABS_LIBRARY_NAME)
+
         conn.isolation_level = None          # manual transaction
         conn.execute("BEGIN IMMEDIATE;")     # lock for consistent updates
         try:
@@ -428,7 +430,7 @@ def main():
                 seen = set()
                 kept = []
                 for b in books:
-                    abs_id = resolve_abs_id_for_book(conn, b)
+                    abs_id = resolve_abs_id_for_book(conn, b, lib_id)
                     if not abs_id or abs_id in seen:
                         continue
                     b.abs_book_id = abs_id
@@ -438,7 +440,7 @@ def main():
 
             # 2) upsert each ABS collection and replace its rows
             for name, books in collections.items():
-                coll_id = upsert_abs_collection_with_books(conn, name, books)
+                coll_id = upsert_abs_collection_with_books(conn, name, books, library_id=lib_id)
                 print(f"Updated collection '{name}' (id={coll_id}) with {len(books)} books")
 
             conn.execute("COMMIT;")
